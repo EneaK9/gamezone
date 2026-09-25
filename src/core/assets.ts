@@ -23,6 +23,14 @@ export const TEXTURE_IDS = [
   "denim_fabric",
   "terry_cloth",
   "brown_leather",
+  "rough_linen",
+  "cotton_jersey",
+  "crepe_satin",
+  "knitted_fleece",
+  "poly_wool_herringbone",
+  "curly_teddy_natural",
+  "hessian_230",
+  "scuba_suede",
 ] as const;
 export type TextureId = (typeof TEXTURE_IDS)[number];
 

@@ -38,6 +38,15 @@ const TEXTURES = {
   denim_fabric: 512,
   terry_cloth: 512,
   brown_leather: 512,
+  // Fabrics for the characters' clothes.
+  rough_linen: 512,
+  cotton_jersey: 512,
+  crepe_satin: 512,
+  knitted_fleece: 512,
+  poly_wool_herringbone: 512,
+  curly_teddy_natural: 512,
+  hessian_230: 512,
+  scuba_suede: 512,
 };
 
 /** Maps to fetch for each texture: Poly Haven key -> local file suffix. */

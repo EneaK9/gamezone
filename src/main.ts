@@ -72,6 +72,8 @@ if (params.has("lineup")) {
   import("./dev/lineup").then((m) => m.lineup());
 } else if (params.has("poselab")) {
   import("./dev/poselab").then((m) => m.poselab());
+} else if (params.has("humanlab")) {
+  import("./dev/humanlab").then((m) => m.humanlab());
 } else if (params.has("preview")) {
   preview();
 } else {

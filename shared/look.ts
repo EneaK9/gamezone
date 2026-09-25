@@ -89,4 +89,27 @@ export interface Look {
   earrings?: number;
   /** Pale tint for shadow clones etc. */
   tint?: string;
+  /**
+   * Realistic body shaping (MakeHuman parameters, all optional): muscle and weight 0..1
+   * (0.5 average), ethnic offsets from the default, and face/body detail targets by id.
+   */
+  body?: {
+    muscle?: number;
+    weight?: number;
+    ethnic?: { caucasian?: number; african?: number };
+    face?: Record<string, number>;
+    /** Oiled/sweaty sheen (wrestlers). */
+    oily?: boolean;
+  };
+  /** Eye rendering: iris style (Sharingan, hollow, glowing). */
+  eyeStyle?: "normal" | "sharingan" | "hollow" | "glow";
+  /** Base eye photo: brown, blue, green, grey, lightblue, brownlight. */
+  eyeTexture?: string;
+  /** Eyebrow style (brow001…brow012) and colour. */
+  brows?: string;
+  browColor?: string;
+  /** Bespoke costume details for a specific character (see src/characters/human/costumes). */
+  costume?: string;
+  /** Eyes held closed (a scarred-shut eye): "L" | "R". */
+  closedEye?: "L" | "R";
 }
