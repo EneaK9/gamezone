@@ -86,6 +86,8 @@ export interface TalkAnswers {
   sellItem: ChoiceAnswer;
   /** One of the village place ids, or "none". */
   place: ChoiceAnswer;
+  /** One of the NPC's service ids, or "none" (only asked when the NPC offers several). */
+  service: ChoiceAnswer;
   /** 0 hostile, 1 curt, 2 neutral, 3 courteous. */
   politeness: ScoreAnswer;
   /** 0 no case, 1 weak, 2 reasonable, 3 strong and courteous. */

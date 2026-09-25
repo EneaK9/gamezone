@@ -92,6 +92,12 @@ export const ITEMS: Record<string, ItemDef> = {
     weapon: { style: "shotgun", damage: 15, reach: 7, speed: 0.8 },
   },
 
+  kanabo: {
+    id: "kanabo", name: "Iron Kanabō", jp: "金棒", kind: "weapon", price: 0,
+    description: "A studded iron club. Swung by oni in the old stories, and by Kurogane now.",
+    weapon: { style: "greatsword", damage: 24, reach: 2.6, speed: 0.75 },
+  },
+
   // — armor —
   padded_jacket: {
     id: "padded_jacket", name: "Padded Jacket", jp: "刺子", kind: "armor", price: 90,
