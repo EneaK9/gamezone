@@ -97,6 +97,8 @@ export interface NpcDef {
   quest?: string;
   topics: NpcTopic[];
   lines: NpcLines;
+  /** Lines (and topic lines, by topic id) that replace the usual ones once their quest is done. */
+  afterQuest?: { lines?: Partial<NpcLines>; topics?: Record<string, string[]> };
   fighter?: NpcFighter;
   /** Hostiles can't be talked to. */
   talkable: boolean;
@@ -907,7 +909,7 @@ export const NPCS: NpcDef[] = [
       { id: "heroes", label: "Heroes", about: "Samurai, heroes, swords, becoming strong", lines: ["When I grow up I'm going to be a samurai! Or a noodle chef. Maybe both!", "Is that a real sword? Can I touch it? No? Okay."] },
     ],
     lines: {
-      greet: ["*sniff* ...Hi.", "Mister — have you seen a white cat?"],
+      greet: ["*sniff* ...Hi.", "Um... have you seen a white cat?"],
       greetFriendly: ["{player}! You're the coolest!"],
       greetCold: ["...You're scary."],
       smallTalk: ["I can count to a thousand. Want to hear?", "Genzo gave me a dango today!"],
@@ -918,6 +920,15 @@ export const NPCS: NpcDef[] = [
       flattered: ["Really? Hehe.", "You think I'm brave?"],
       noWork: ["Can you find Mochi? Please?"],
       challengeRefused: ["I'm only eight!"],
+    },
+    afterQuest: {
+      lines: {
+        greet: ["{player}! Mochi's home! She sleeps on my futon now.", "Hi, {player}! Mochi says thank you. Well, she said 'mrrp'."],
+        farewell: ["Bye, {player}!", "Come visit Mochi sometime!"],
+      },
+      topics: {
+        mochi: ["Mochi's home! She sleeps on my futon now. She snores!", "I'm not letting her near the pagoda again. ...She'll go anyway."],
+      },
     },
     talkable: true,
   },

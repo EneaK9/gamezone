@@ -6,6 +6,10 @@ export interface QuestDef {
   title: string;
   /** One-line summary shown in the journal and given to Jev as context. */
   summary: string;
+  /** A line the giver drops when you first meet, hinting at their trouble. */
+  hook?: string;
+  /** Eager givers ask for help straight away (the hook becomes the offer). */
+  eager?: boolean;
   /** What the giver says when offering the task. */
   offer: string;
   accepted: string;
@@ -22,6 +26,7 @@ export const QUESTS: Record<string, QuestDef> = {
     id: "bandits",
     giver: "goro",
     title: "The Bandit Problem",
+    hook: "Bandits in the north woods are bleeding this village dry.",
     summary: "Defeat Kurogane, the bandit chief who camps in the north woods, then report to Captain Goro.",
     offer: "Kurogane and his gang camp in the north woods. Break them — bring down Kurogane himself — and the village will pay you four hundred mon. Will you do it?",
     accepted: "Good. Leave by the north gate and follow the path into the woods. Don't let them surround you.",
@@ -34,6 +39,8 @@ export const QUESTS: Record<string, QuestDef> = {
     id: "mochi",
     giver: "kenta",
     title: "Mochi Is Missing",
+    hook: "Mochi's gone... my cat! She's white with one black ear. Will you help me find her? Please?",
+    eager: true,
     summary: "Find Kenta's white cat Mochi (one black ear) and bring her back to him at the square.",
     offer: "Mochi's been gone since yesterday... She's white with one black ear. Will you help me find her? Please?",
     accepted: "Thank you! She likes high places... and fish!",
@@ -46,6 +53,7 @@ export const QUESTS: Record<string, QuestDef> = {
     id: "riddles",
     giver: "kukai",
     title: "Riddles of the Mountain Shrine",
+    hook: "Care for a riddle? The fox kami loves a clever guest.",
     summary: "Answer the monk Kukai's three riddles at the mountain shrine.",
     offer: "I have three riddles. Answer them all and the fox kami will grant you her charm. Shall we begin?",
     accepted: "Wonderful. Listen carefully...",
@@ -58,6 +66,8 @@ export const QUESTS: Record<string, QuestDef> = {
     id: "rice",
     giver: "hana",
     title: "Rice for the Inn",
+    hook: "You're just who I need! My cart wheel broke and Sayo at the inn needs a bale of rice today. Could you carry it for me?",
+    eager: true,
     summary: "Carry a bale of Hana's rice to Sayo at the Sakura Inn.",
     offer: "My cart wheel's broken and Sayo at the inn needs this bale of rice today. Could you carry it for me? She'll pay you.",
     accepted: "You're a lifesaver! Here — careful, it's heavy.",
@@ -70,6 +80,8 @@ export const QUESTS: Record<string, QuestDef> = {
     id: "charm",
     giver: "isamu",
     title: "The Fisherman's Charm",
+    hook: "My lucky carp charm fell in the river up by the stepping stones. Would you look for it? I'll pay sixty mon.",
+    eager: true,
     summary: "Find Isamu's lucky carp charm in the shallow river by the stepping stones north of the village.",
     offer: "My lucky carp charm fell in the river by the stepping stones up north. If you find it, I'll give you sixty mon. Deal?",
     accepted: "Look for something glinting in the shallows near the stones.",
@@ -82,6 +94,7 @@ export const QUESTS: Record<string, QuestDef> = {
     id: "moonblade",
     giver: "tetsu",
     title: "The Moon Blade",
+    hook: "Kurogane sits on a lump of moon iron. The finest steel I could ever forge, wasted on a bandit.",
     summary: "Take the moon iron from Kurogane's bandit camp and bring it to Tetsu the swordsmith, with 150 mon for his work.",
     offer: "Kurogane is sitting on a lump of moon iron. Bring it to me with a hundred and fifty mon for charcoal and I'll forge you the Moon Blade. Interested?",
     accepted: "Good. The iron will be near his fire. Pale, cold, heavier than it looks.",

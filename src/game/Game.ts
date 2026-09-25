@@ -147,7 +147,7 @@ export class Game {
       this.npcs.push(n);
       this.scene.add(n.actor.character.root);
     }
-    this.cat.place(114.5, 48.5, this.world);
+    this.cat.place(106.6, 44.5, this.world);
     this.cat.root.visible = false;
     this.scene.add(this.cat.root);
 
@@ -1058,6 +1058,8 @@ export class Game {
     this.convo = null;
     this.hud.dim(false);
     if (this.mode === "dialogue") this.mode = "play";
+    // The key that closed the conversation (Esc) must not also open the menu.
+    this.input.clear();
     this.input.gameplay = true;
     this.input.requestLock();
     this.audio.play("close");

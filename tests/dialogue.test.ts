@@ -107,6 +107,18 @@ describe("quests", () => {
     expect(state.data.money).toBe(520);
   });
 
+  it("a ready task leads the greeting, and the giver's lines move on once it's done", () => {
+    state.setQuest("mochi", "active", 0);
+    state.setFact("cat_following");
+    const d = director("kenta");
+    expect(d.opening().lines[0]).toMatch(/MOCHI/);
+    d.choose("report");
+    expect(quests.isDone("mochi")).toBe(true);
+    expect(state.data.money).toBe(145);
+    expect(d.choose("bye").lines.join(" ")).not.toMatch(/come home/);
+    expect(director("kenta").opening().lines.join(" ")).not.toMatch(/sniff|white cat/);
+  });
+
   it("riddles advance on a correct answer and give a hint after two misses", () => {
     state.setQuest("riddles", "active", 0);
     const d = director("kukai");

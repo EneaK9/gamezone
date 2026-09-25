@@ -70,7 +70,7 @@ export function fill(s: string, vars: Record<string, string | number>) {
 const COMPASS = ["north", "north-east", "east", "south-east", "south", "south-west", "west", "north-west"];
 
 export class DialogueDirector {
-  readonly npc: NpcDef;
+  private readonly base: NpcDef;
   history: ChatLine[] = [];
   private pending: Pending | null = null;
   private rng = makeRng(Date.now() % 100000);
@@ -91,7 +91,19 @@ export class DialogueDirector {
     /** Where the NPC is standing (for directions). */
     private at: { x: number; z: number },
   ) {
-    this.npc = NPC_BY_ID[npcId];
+    this.base = NPC_BY_ID[npcId];
+  }
+
+  /** The NPC, speaking its after-quest lines once its own task is done. */
+  get npc(): NpcDef {
+    const b = this.base;
+    const after = b.afterQuest;
+    if (!after || !b.quest || !this.quests.isDone(b.quest)) return b;
+    return {
+      ...b,
+      lines: { ...b.lines, ...after.lines },
+      topics: b.topics.map((t) => (after.topics?.[t.id] ? { ...t, lines: after.topics[t.id] } : t)),
+    };
   }
 
   get pendingQuestion(): PendingQuestion | null {
@@ -138,10 +150,21 @@ export class DialogueDirector {
       const reaction = archetypeReaction(this.player.archetype, this.npc);
       if (reaction) lines.push(reaction);
     }
-    // Quest nudges.
+    // Quest nudges: news of a finished task replaces the small talk.
     const q = this.npc.quest;
-    if (q && this.quests.isActive(q) && this.quests.requirementsMet(q)) lines.push(this.npcOnQuestReady(q));
+    if (q && this.quests.isActive(q) && this.quests.requirementsMet(q)) lines[0] = this.npcOnQuestReady(q);
     if (this.npc.id === "sayo" && this.state.has("rice_bale") && this.quests.isActive("rice")) lines.push("Is that... a rice bale? From Hana?");
+    // Villagers with a problem bring it up; the eager ones ask for help right away.
+    if (q && !this.quests.stage(q) && QUESTS[q].hook) {
+      const def = QUESTS[q];
+      if (def.eager) {
+        const t = this.offerQuest(q, def.hook!);
+        t.lines = [...lines, ...t.lines];
+        t.actions.push({ kind: "bow" });
+        return this.say(t);
+      }
+      lines.push(def.hook!);
+    }
     return this.say(T(lines, { actions: [{ kind: "bow" }] }));
   }
 
@@ -341,6 +364,7 @@ export class DialogueDirector {
         if (a.topic.choice !== "none" && (a.topic.confidence >= 0.35 || fromButton)) t = this.topic(a.topic.choice);
         else if (a.place.choice !== "none" && a.place.confidence >= 0.45) t = this.directions(a.place.choice);
         else if (n.id === "kukai" && riddleId) t = this.presentRiddle(riddleId);
+        else if (n.quest && !this.quests.stage(n.quest)) t = this.work();
         else t = T(n.topics.length ? "Hmm, I couldn't say. Ask me about something I know." : this.pick(n.lines.smallTalk));
         break;
       case "ask_directions":
@@ -583,6 +607,12 @@ export class DialogueDirector {
       return T(def.reminder);
     }
     if (q === "jubei") return this.challenge(syntheticAnswers());
+    return this.offerQuest(q, def.offer);
+  }
+
+  /** Ask the player to take on a task; `line` is how the NPC puts it. */
+  private offerQuest(q: string, line: string): Turn {
+    const def = QUESTS[q];
     this.pending = {
       q: { kind: "task", question: `Accept "${def.title}"?` },
       yes: () => {
@@ -594,9 +624,9 @@ export class DialogueDirector {
         if (q === "charm") t.actions.push({ kind: "marker", place: "stepping_stones" });
         return t;
       },
-      no: () => T("Another time, then."),
+      no: () => T(def.eager ? "Oh... okay. If you change your mind, I'll be here." : "Another time, then."),
     };
-    return T(def.offer, { pending: this.pending.q });
+    return T(line, { pending: this.pending.q });
   }
 
   private report(a: TalkAnswers): Turn {

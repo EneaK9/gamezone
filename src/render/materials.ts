@@ -84,7 +84,6 @@ export class Materials {
       map: t.map,
       normalMap: t.normalMap,
       roughnessMap: t.arm,
-      aoMap: undefined,
       roughness: 1,
       metalness: 0,
       ...opts,

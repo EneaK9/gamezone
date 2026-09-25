@@ -1,45 +1,71 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { defineConfig, loadEnv, type Connect, type Plugin } from "vite";
-import { allowRequest, BadRequest, handleTalk } from "./server/talk";
+import { fileURLToPath } from "node:url";
+import { defineConfig, loadEnv, runnerImport, type Connect, type Plugin } from "vite";
 
-/** Serves POST /api/talk from the dev and preview servers (Vercel uses api/talk.ts). */
+type TalkModule = typeof import("./server/talk");
+
+const TALK_MODULE = fileURLToPath(new URL("./server/talk.ts", import.meta.url));
+
+/**
+ * Serves POST /api/talk from the dev and preview servers (Vercel uses api/talk.ts).
+ * The server code is loaded through Vite rather than imported by this config, so edits
+ * to server/ and shared/ apply without restarting the dev server.
+ */
 function talkApi(env: Record<string, string>): Plugin {
-  const handler: Connect.NextHandleFunction = (req: IncomingMessage, res: ServerResponse, next) => {
-    if (req.url?.split("?")[0] !== "/api/talk") return next();
-    const send = (status: number, body: unknown) => {
-      res.statusCode = status;
-      res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify(body));
-    };
-    if (req.method !== "POST") return send(405, { error: "POST only" });
-    if (!allowRequest(req.socket.remoteAddress ?? "local")) return send(429, { error: "Too many requests" });
-
-    let raw = "";
-    req.on("data", (chunk: Buffer) => {
-      raw += chunk;
-      if (raw.length > 32_000) req.destroy();
-    });
-    req.on("end", async () => {
+  const middleware =
+    (load: () => Promise<TalkModule>): Connect.NextHandleFunction =>
+    async (req: IncomingMessage, res: ServerResponse, next) => {
+      if (req.url?.split("?")[0] !== "/api/talk") return next();
+      const send = (status: number, body: unknown) => {
+        res.statusCode = status;
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify(body));
+      };
+      if (req.method !== "POST") return send(405, { error: "POST only" });
+      let api: TalkModule;
       try {
-        const result = await handleTalk(JSON.parse(raw || "{}"), {
-          apiKey: env.TYPESAFE_API_KEY || process.env.TYPESAFE_API_KEY,
-          model: env.TYPESAFE_MODEL || process.env.TYPESAFE_MODEL,
-        });
-        send(200, result);
+        api = await load();
       } catch (err) {
-        if (err instanceof BadRequest || err instanceof SyntaxError) return send(400, { error: err.message });
         console.error(err);
-        send(500, { error: "Internal error" });
+        return send(500, { error: "Internal error" });
       }
-    });
-  };
+      if (!api.allowRequest(req.socket.remoteAddress ?? "local")) return send(429, { error: "Too many requests" });
+
+      let raw = "";
+      req.on("data", (chunk: Buffer) => {
+        raw += chunk;
+        if (raw.length > 32_000) req.destroy();
+      });
+      req.on("end", async () => {
+        try {
+          const result = await api.handleTalk(JSON.parse(raw || "{}"), {
+            apiKey: env.TYPESAFE_API_KEY || process.env.TYPESAFE_API_KEY,
+            model: env.TYPESAFE_MODEL || process.env.TYPESAFE_MODEL,
+          });
+          send(200, result);
+        } catch (err) {
+          if (err instanceof api.BadRequest || err instanceof SyntaxError) return send(400, { error: err.message });
+          console.error(err);
+          send(500, { error: "Internal error" });
+        }
+      });
+    };
   return {
     name: "kazemura-talk-api",
     configureServer(server) {
-      server.middlewares.use(handler);
+      server.middlewares.use(middleware(() => server.ssrLoadModule(TALK_MODULE) as Promise<TalkModule>));
     },
     configurePreviewServer(server) {
-      server.middlewares.use(handler);
+      let loaded: Promise<TalkModule> | undefined;
+      const load = () =>
+        (loaded ??= runnerImport<TalkModule>(TALK_MODULE).then(
+          (r) => r.module,
+          (err) => {
+            loaded = undefined; // retry on the next request
+            throw err;
+          },
+        ));
+      server.middlewares.use(middleware(load));
     },
   };
 }
