@@ -5,6 +5,7 @@
 import * as THREE from "three";
 import type { Look } from "../../../shared/look";
 import type { Anatomy } from "./anatomy";
+import { hairF, type Hairline } from "./hair";
 import type { SkinStroke } from "./skin";
 
 interface Tri {
@@ -112,7 +113,7 @@ function arc(a: THREE.Vector3, b: THREE.Vector3, bulge: THREE.Vector3, n = 10) {
 }
 
 /** Scars, whiskers, stubble, scalp shading for a look, as UV strokes. */
-export function markStrokes(a: Anatomy, look: Look, opts: { scalp?: "hair" | "shaved" | "none"; hairColor?: string }): SkinStroke[] {
+export function markStrokes(a: Anatomy, look: Look, opts: { scalp?: "hair" | "shaved" | "none"; hairColor?: string; hairline?: Hairline }): SkinStroke[] {
   const out: SkinStroke[] = [];
   const s = a.H / 1.75;
   const face = new SkinSurface(a, (p) => p.y > a.chinY - 0.03 && p.z > a.headCentre.z - 0.01);
@@ -197,17 +198,22 @@ export function markStrokes(a: Anatomy, look: Look, opts: { scalp?: "hair" | "sh
     const alpha = facial === "stubble" ? 0.28 : 0.42;
     for (const t of tris) out.push({ kind: "shade", points: t, color: mixHex(col, "#ffffff", 0.35), alpha });
   }
-  // Scalp: shaved pates read blue-grey; under hair, tint toward the hair colour so gaps
-  // between strands don't show bare skin.
-  if (opts.scalp && opts.scalp !== "none") {
-    const head = new SkinSurface(a, (p) => p.y > a.eye.L.y - 0.02);
-    const scalp = (p: THREE.Vector3) => {
-      const d = a.headDir(p);
-      return d.y > 0.25 - Math.max(0, -d.z) * 0.6 && !(d.z > 0.55 && d.y < 0.55);
-    };
-    const tris = head.fills(scalp);
-    const col = opts.scalp === "shaved" ? "#7d8a93" : opts.hairColor ?? "#1a1716";
-    for (const t of tris) out.push({ kind: "shade", points: t, color: mixHex(col, "#ffffff", opts.scalp === "shaved" ? 0.45 : 0.15), alpha: opts.scalp === "shaved" ? 0.35 : 0.8 });
+  // Scalp: under hair, tint toward the hair colour so gaps between strands don't show
+  // bare skin (feathered just past the hairline); shaved pates read blue-grey.
+  if (opts.scalp && opts.scalp !== "none" && opts.hairline) {
+    const hl = opts.hairline;
+    const head = new SkinSurface(a, (p) => p.y > a.eye.L.y - 0.03);
+    const d = new THREE.Vector3();
+    const f = (p: THREE.Vector3) => hairF(a.headDir(p, d).normalize(), hl.front, hl.side, hl.back);
+    const hairCol = mixHex(opts.hairColor ?? "#1a1716", "#ffffff", 0.12);
+    for (const [lo, alpha] of [
+      [-0.05, 0.25],
+      [-0.02, 0.45],
+      [0.02, 0.85],
+    ] as const)
+      for (const t of head.fills((p) => f(p) > lo && !hl.exclude?.(a.headDir(p, d).normalize()))) out.push({ kind: "shade", points: t, color: hairCol, alpha });
+    if (opts.scalp === "shaved" && hl.exclude)
+      for (const t of head.fills((p) => hl.exclude!(a.headDir(p, d).normalize()))) out.push({ kind: "shade", points: t, color: "#9aa3a8", alpha: 0.3 });
   }
   return out;
 }

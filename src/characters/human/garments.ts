@@ -23,8 +23,67 @@ export class Outfit {
   private profDY = 0.01;
   private profN = 0;
 
+  /** Outermost cloth radius so far, per [height step][angle step] (layering). */
+  private clr: Float32Array | null = null;
+
   constructor(readonly a: Anatomy) {
     this.covered = new Uint8Array(a.n);
+  }
+
+  private cell(y: number, ang: number): number {
+    if (!this.prof) this.buildProfile();
+    const N = Outfit.PROF_ANG;
+    const iy = Math.round((y - this.profY0) / this.profDY);
+    if (iy < 0 || iy >= this.profN) return -1;
+    let ia = Math.round(((ang / (Math.PI * 2)) * N) % N);
+    if (ia < 0) ia += N;
+    return iy * N + (ia % N);
+  }
+
+  /** Does this vertex sit round the torso axis (not on an arm or a separate leg)? */
+  private stackable(v: CV) {
+    if (v.region >= 2 && v.region <= 5) return false;
+    if (v.region >= 6 && v.p.y < this.a.hipY - 0.12) return false;
+    return Math.hypot(v.p.x, v.p.z - this.axisZ(v.p.y)) < 0.34;
+  }
+
+  /** Push a shell outside the cloth already worn (by `margin`). */
+  clear(sh: Shell, margin = 0.004) {
+    if (!this.clr) return;
+    for (const v of sh.verts) {
+      if (!this.stackable(v)) continue;
+      const c = this.axisZ(v.p.y);
+      const ang = Math.atan2(v.p.x, v.p.z - c);
+      const k = this.cell(v.p.y, ang);
+      if (k < 0) continue;
+      const need = this.clr[k] + margin;
+      const r = Math.hypot(v.p.x, v.p.z - c);
+      if (r > 1e-4 && r < need) {
+        const s = need / r;
+        v.p.x *= s;
+        v.p.z = c + (v.p.z - c) * s;
+      }
+    }
+  }
+
+  /** Remember a shell as the new outer layer. */
+  record(sh: Shell) {
+    if (!this.prof) this.buildProfile();
+    if (!this.clr) this.clr = new Float32Array(this.profN * Outfit.PROF_ANG);
+    const N = Outfit.PROF_ANG;
+    for (const v of sh.verts) {
+      if (!this.stackable(v)) continue;
+      const c = this.axisZ(v.p.y);
+      const ang = Math.atan2(v.p.x, v.p.z - c);
+      const k = this.cell(v.p.y, ang);
+      if (k < 0) continue;
+      const r = Math.hypot(v.p.x, v.p.z - c);
+      // Spread to neighbours so gaps between vertices are covered too.
+      for (const d of [0, 1, -1, N, -N]) {
+        const j = k + d;
+        if (j >= 0 && j < this.clr.length) this.clr[j] = Math.max(this.clr[j], r * (d ? 0.992 : 1));
+      }
+    }
   }
 
   acc(look: ClothLook): Acc {
@@ -281,11 +340,16 @@ function wrinkle(sh: Shell, amp = 0.003, freq = 18, seed = 1) {
   return sh;
 }
 
-function layer(o: Outfit, look: ClothLook, sh: Shell, opts: { hem?: number; tile?: number } = {}) {
+function layer(o: Outfit, look: ClothLook, sh: Shell, opts: { hem?: number; tile?: number; stack?: boolean } = {}) {
   const acc = o.acc(look);
   const tile = opts.tile ?? fabricTile(look.fabric);
+  if (opts.stack !== false) {
+    o.clear(sh);
+    renormal(sh);
+  }
   emit(acc, o.a, sh, { tile });
   if (opts.hem) hem(acc, o.a, sh, opts.hem, { tile });
+  if (opts.stack !== false) o.record(sh);
   return acc;
 }
 
@@ -339,7 +403,7 @@ export function buildGarments(o: Outfit, look: Look) {
   const has = (k: Garment["kind"]) => look.garments.some((g) => g.kind === k);
   const lower = has("hakama") || has("long_kimono");
   for (const g of look.garments) {
-    const fabric = (g as { fabric?: Fabric }).fabric ?? fabricOf(g.kind);
+    const fabric = (g.fabric as Fabric | undefined) ?? fabricOf(g.kind);
     switch (g.kind) {
       case "kimono":
         kimono(o, g, fabric, lower, look);
@@ -423,15 +487,16 @@ function kimono(o: Outfit, g: Extract<Garment, { kind: "kimono" }>, fabric: Fabr
   const a = o.a;
   const color = g.color;
   const cl: ClothLook = { color, fabric, pattern: g.pattern, accent: g.accent };
-  const vBottom = g.open ? a.navelY + 0.02 : a.chestY - (look.sex === "f" ? 0.02 : 0.075);
-  const neck = vNeck(a, vBottom, g.open ? 0.07 : 0.05, g.open ? 0 : -0.012);
+  const vBottom = g.open ? a.navelY + 0.02 : a.chestY - (look.sex === "f" ? 0.03 : 0.06);
+  const hwTop = g.open ? 0.075 : 0.068;
+  const neck = vNeck(a, vBottom, hwTop, g.open ? 0 : -0.014);
   const bottom = tucked ? a.waistY - 0.07 : a.hipY - 0.02;
   const bodyT = g.sleeves === "wide" || g.sleeves === "narrow" ? 0.1 : sleeveT(g.sleeves);
   const f = topField(a, bottom, bodyT, neck);
   let sh = cut(a, "tights", f);
   smooth(sh, 3, 0.5);
   inflate(sh, TH.kimono);
-  drape(o, sh, a.chestY + 0.02, bottom, 0.9);
+  drape(o, sh, a.chestY + 0.02, tucked ? a.waistY + 0.03 : bottom, 0.9);
   renormal(sh);
   wrinkle(sh, 0.0025, 14);
   layer(o, cl, sh, { hem: 0.008 });
@@ -446,113 +511,118 @@ function kimono(o: Outfit, g: Extract<Garment, { kind: "kimono" }>, fabric: Fabr
     layer(o, cl, skirt, { hem: 0.009 });
     skirt = skirt as Shell;
   }
-  collar(o, vBottom, g.open ? 0.07 : 0.05, g.collar ?? shade(color, 0.8), fabric, g.open ? 0 : -0.012, g.collar ? true : false, color);
-  if (g.sleeves === "wide" || g.sleeves === "narrow") for (const s of SIDES) kimonoSleeve(o, s, cl, g.sleeves === "wide" ? 1 : 0.35);
+  collar(o, vBottom, hwTop, shade(color, 0.82), fabric, g.open ? 0 : -0.014, !!g.collar, color);
+  if (g.sleeves === "wide" || g.sleeves === "narrow") for (const s of SIDES) kimonoSleeve(o, s, cl, g.sleeves === "wide" ? 1 : 0.2);
   void sh;
 }
 
 /**
- * The kimono collar: a band standing on the V edge, round the back of the neck and down
- * both fronts to where they cross; a thin white under-collar line if `inner` is set.
+ * The kimono collar (eri): a band lying on the V edges — round the back of the neck and
+ * down both fronts to where they cross (left panel over right) — plus a thin white
+ * under-collar line (juban) showing inside the V when `showInner`.
  */
 function collar(o: Outfit, vBottom: number, hwTop: number, color: string, fabric: Fabric, offsetX: number, showInner: boolean, kimonoColor: string) {
   const a = o.a;
   const neck = a.joint("neck");
-  const pts: THREE.Vector3[] = [];
-  const top = neck.y - 0.005;
-  // Down the character's right front from the V bottom, around the back, down the left.
-  const N = 22;
-  const edge = (t: number, side: Side): THREE.Vector3 => {
-    const y = THREE.MathUtils.lerp(vBottom, top, t);
-    const hw = hwTop * t;
-    const x = offsetX * (1 - t) + sx(side) * hw;
-    const ang = Math.atan2(x, 0.12);
-    return o.ringPoint(y, ang * 0.9 + (t > 0.9 ? sx(side) * (t - 0.9) * 2 : 0), TH.kimono + 0.004);
+  const top = neck.y + 0.004;
+  const band = 0.036;
+  const lift = TH.kimono + 0.003;
+  // One side: from the crossing point up the V edge to the side of the neck.
+  const side = (sgn: number): THREE.Vector3[] => {
+    const pts: THREE.Vector3[] = [];
+    for (let i = 0; i <= 16; i++) {
+      const t = i / 16;
+      const y = THREE.MathUtils.lerp(vBottom, top, t);
+      const x = THREE.MathUtils.lerp(offsetX, sgn * hwTop, Math.pow(t, 0.85));
+      pts.push(o.ringPoint(y, Math.atan2(x, 0.11), lift));
+    }
+    return pts;
   };
-  for (let i = 0; i <= N; i++) pts.push(edge(i / N, "R"));
-  // Behind the neck: an arc at collar height.
-  const backY = neck.y + 0.03;
-  for (let i = 1; i < 12; i++) {
-    const ang = -Math.PI / 2 - (i / 12) * Math.PI;
-    const r = 0.075;
-    pts.push(new THREE.Vector3(Math.sin(ang) * r * -1 * (i < 6 ? 1 : 1), THREE.MathUtils.lerp(top, backY, Math.sin((i / 12) * Math.PI)), neck.z + Math.cos(ang) * r));
+  const back: THREE.Vector3[] = [];
+  const r = Math.max(0.062, hwTop * 1.05);
+  for (let i = 1; i < 14; i++) {
+    const ang = Math.PI / 2 - (i / 14) * Math.PI; // from the right side, round the back, to the left
+    back.push(new THREE.Vector3(-Math.sin(-ang) * r, top + 0.018 * Math.sin((i / 14) * Math.PI), neck.z - Math.cos(ang) * r * 0.95 + 0.004));
   }
-  for (let i = N; i >= 0; i--) pts.push(edge(i / N, "L"));
-  // Smooth the path and build a band standing out from the body.
-  const path = pts;
-  const side: THREE.Vector3[] = [];
+  // Wearer's right side first (runs down the inside), then back, then the left (outer).
+  const right = side(-1).reverse();
+  const left = side(1);
+  const path = [...right, ...back.reverse().map((p) => new THREE.Vector3(-p.x, p.y, p.z)), ...left];
   const nrm: THREE.Vector3[] = [];
+  const across: THREE.Vector3[] = [];
   for (let i = 0; i < path.length; i++) {
     const prev = path[Math.max(0, i - 1)];
     const next = path[Math.min(path.length - 1, i + 1)];
     const t = next.clone().sub(prev).normalize();
-    const c = new THREE.Vector3(0, path[i].y, o.axisZ(path[i].y));
-    const out = path[i].clone().sub(c).setY(0).normalize();
-    const s = new THREE.Vector3().crossVectors(t, out).normalize();
-    side.push(s);
+    const out = path[i].clone().sub(new THREE.Vector3(0, path[i].y, o.axisZ(path[i].y))).setY(0).normalize();
     nrm.push(out);
+    // The band lies outward from the V opening: across = away from the opening.
+    const c = new THREE.Vector3().crossVectors(t, out).normalize();
+    across.push(c);
   }
-  const wBack = (i: number) => (i > N && i < N + 12 ? 1 : 0);
   const weights = (t: number) => {
-    const i = Math.round(t * (path.length - 1));
-    return wBack(i) ? wMix([[wOne(o.bone("neck")), 0.4], [wOne(o.bone("chest")), 0.6]]) : wOne(o.bone("chest"));
+    const i = t * (path.length - 1);
+    const onBack = i > right.length - 2 && i < right.length + back.length + 1;
+    return onBack ? wMix([[wOne(o.bone("neck")), 0.35], [wOne(o.bone("chest")), 0.65]]) : wOne(o.bone("chest"));
   };
-  const acc = o.acc({ color, fabric });
-  strip(acc, path, side, nrm, () => 0.042, weights, { tile: fabricTile(fabric), centred: false });
+  strip(o.acc({ color, fabric }), path, across, nrm, () => band, weights, { tile: fabricTile(fabric), centred: false });
   if (showInner) {
-    const inner = path.map((p, i) => p.clone().addScaledVector(side[i], -0.004).addScaledVector(nrm[i], -0.003));
-    strip(o.acc({ color: "#e9e4d8", fabric: "cotton" }), inner, side, nrm, () => 0.012, weights, { tile: fabricTile("cotton"), centred: true });
+    const inner = path.map((p, i) => p.clone().addScaledVector(across[i], -0.009).addScaledVector(nrm[i], -0.0015));
+    strip(o.acc({ color: "#e9e4d8", fabric: "cotton" }), inner, across, nrm, () => 0.013, weights, { tile: fabricTile("cotton"), centred: false });
   }
   void kimonoColor;
 }
 
 /**
- * Kimono sleeve with arms at rest: a tube round the arm whose section is stretched front-
- * to-back into the hanging bag (tamoto). `bag` 0 (narrow) … 1 (wide shihakushō sleeve).
+ * Kimono sleeve with the arms at rest: a soft bag hanging beside the arm — deep front-to-
+ * back, only a little wider than the arm side-to-side — with the forearm coming out of
+ * its front. `bag` 0 (narrow work sleeve) … 1 (wide formal / shihakushō sleeve).
  */
-function kimonoSleeve(o: Outfit, side: Side, cl: ClothLook, bag: number) {
+function kimonoSleeve(o: Outfit, side: Side, cl: ClothLook, bag: number, end = 1.0) {
   const a = o.a;
   const c = a.arm[side];
-  const shoulder = c.pts[0];
-  const wrist = c.pts[2];
   const path: THREE.Vector3[] = [];
-  const N = 14;
+  const N = 16;
   for (let i = 0; i <= N; i++) {
-    const t = THREE.MathUtils.lerp(0.06, 1.02, i / N);
-    // Along the chain.
+    const t = THREE.MathUtils.lerp(0.03, end, i / N);
     const d = t * c.total;
     let k = 0;
     while (k < c.len.length - 2 && c.len[k + 1] < d) k++;
     const seg = (d - c.len[k]) / (c.len[k + 1] - c.len[k]);
     path.push(c.pts[k].clone().lerp(c.pts[k + 1], seg));
   }
-  const dir = wrist.clone().sub(shoulder).normalize();
-  const fwd = new THREE.Vector3(0, 0, 1).addScaledVector(dir, -dir.z).normalize();
-  const out = new THREE.Vector3().crossVectors(dir, fwd).multiplyScalar(side === "L" ? -1 : 1);
-  const armR = 0.052;
-  const depth = THREE.MathUtils.lerp(0.075, 0.2, bag);
-  const width = THREE.MathUtils.lerp(0.07, 0.1, bag);
   const b = (n: string) => o.bone(n + side);
+  const armR = 0.048 * (a.H / 1.75);
+  const depth = THREE.MathUtils.lerp(armR + 0.032, 0.125, bag); // half, front-back
+  const width = armR + THREE.MathUtils.lerp(0.016, 0.026, bag); // half, side-to-side
   const w = (t: number) => {
-    const k = THREE.MathUtils.smoothstep(t, 0.34, 0.5);
-    return wMix([[wOne(b("upperArm")), 1 - k], [wOne(b("foreArm")), k]]);
+    const k = THREE.MathUtils.smoothstep(t, 0.36, 0.52);
+    // The bag rides mostly on the upper arm so it doesn't whip about with the wrist.
+    return wMix([[wOne(b("upperArm")), 1 - k * 0.75], [wOne(b("foreArm")), k * 0.75]]);
   };
-  const acc = o.acc(cl);
+  const frames = path.map((p, i) => {
+    const d = path[Math.min(path.length - 1, i + 1)].clone().sub(path[Math.max(0, i - 1)]).normalize();
+    const fwd = new THREE.Vector3(0, 0, 1).addScaledVector(d, -d.z).normalize();
+    const out = new THREE.Vector3().crossVectors(d, fwd).multiplyScalar(side === "L" ? -1 : 1);
+    return { x: out, y: fwd };
+  });
   tube(
-    acc,
+    o.acc(cl),
     path,
-    () => ({ x: out, y: fwd }),
+    (i) => frames[i],
     (t, ang) => {
-      const grow = THREE.MathUtils.smoothstep(t, 0, 0.22);
-      const rx = THREE.MathUtils.lerp(armR + 0.012, width, grow);
-      const rz = THREE.MathUtils.lerp(armR + 0.014, depth, grow);
+      const grow = THREE.MathUtils.smoothstep(t, 0, 0.25);
+      const rx = THREE.MathUtils.lerp(armR + 0.01, width, grow);
+      const rz = THREE.MathUtils.lerp(armR + 0.012, depth, grow);
+      // Ellipse, with the bag sagging toward the back at the bottom of the sleeve.
       const x = Math.cos(ang) * rx;
       const z = Math.sin(ang) * rz;
-      // The bag hangs behind the forearm.
-      return Math.hypot(x, z - (rz - armR) * 0.35 * Math.max(0, -Math.sin(ang)) * grow);
+      const sag = Math.max(0, -Math.sin(ang)) * THREE.MathUtils.smoothstep(t, 0.55, 1) * bag * 0.035;
+      const folds = 0.004 * Math.sin(ang * 5 + t * 7) * grow;
+      return Math.hypot(x, z) + sag + folds;
     },
     w,
-    { segments: 20, tile: fabricTile(cl.fabric) },
+    { segments: 24, tile: fabricTile(cl.fabric) },
   );
 }
 
@@ -590,7 +660,8 @@ function haori(o: Outfit, g: Extract<Garment, { kind: "haori" }>, fabric: Fabric
   const hemY = g.long ? a.kneeY - 0.28 : a.hipY - 0.16;
   const front = (s: number) => {
     const p = a.pos(s);
-    return p.z > o.axisZ(p.y) + 0.02 ? Math.abs(p.x) - 0.07 : 1;
+    const fz = THREE.MathUtils.smoothstep(p.z - o.axisZ(p.y), -0.01, 0.07);
+    return THREE.MathUtils.lerp(0.2, Math.abs(p.x) - 0.075, fz);
   };
   const lowerF = F.min(F.below(a, a.waistY - 0.02), F.above(a, hemY), front);
   const lower = cut(a, "skirt", lowerF);
@@ -599,9 +670,9 @@ function haori(o: Outfit, g: Extract<Garment, { kind: "haori" }>, fabric: Fabric
   renormal(lower);
   wrinkle(lower, 0.004, 9, 3);
   layer(o, cl, lower, { hem: 0.012 });
-  if (!g.sleeveless) for (const s of SIDES) kimonoSleeve(o, s, cl, 0.85);
+  if (!g.sleeveless) for (const s of SIDES) kimonoSleeve(o, s, cl, 0.9, 0.9);
   else for (const s of SIDES) capSleeve(o, s, cl);
-  collar(o, a.hipY - 0.2, 0.075, shade(g.color, 0.85), fabric, 0, false, g.color);
+  collar(o, a.hipY - 0.2, 0.078, shade(g.color, 0.85), fabric, 0, false, g.color);
   if (g.crest) for (const s of ["back", "L", "R"] as const) crestDecal(o, g.crest, s);
 }
 
@@ -679,7 +750,7 @@ function longKimono(o: Outfit, g: Extract<Garment, { kind: "long_kimono" }>, fab
   const a = o.a;
   const cl: ClothLook = { color: g.color, fabric, pattern: g.pattern, accent: g.accent };
   const vBottom = a.chestY - 0.03;
-  const neck = vNeck(a, vBottom, 0.045, -0.01);
+  const neck = vNeck(a, vBottom, 0.06, -0.012);
   const f = topField(a, a.waistY - 0.04, 0.1, neck);
   const sh = cut(a, "tights", f);
   smooth(sh, 3, 0.5);
@@ -694,7 +765,7 @@ function longKimono(o: Outfit, g: Extract<Garment, { kind: "long_kimono" }>, fab
   renormal(skirt);
   wrinkle(skirt, 0.003, 11, 4);
   layer(o, cl, skirt, { hem: 0.009 });
-  collar(o, vBottom, 0.045, g.collar ?? "#efe9dc", fabric, -0.01, true, g.color);
+  collar(o, vBottom, 0.06, shade(g.color, 0.85), fabric, -0.012, true, g.color);
   for (const s of SIDES) kimonoSleeve(o, s, cl, 1);
   o.cover(F.min(f, (s) => (a.region[s] === 0 ? 0.03 : -1)));
 }
@@ -723,7 +794,7 @@ function hakama(o: Outfit, g: Extract<Garment, { kind: "hakama" }>, fabric: Fabr
 
 function pants(o: Outfit, g: Extract<Garment, { kind: "pants" }>, fabric: Fabric) {
   const a = o.a;
-  const len = g.length === "long" ? 0.965 : g.length === "knee" ? 0.56 : 0.32;
+  const len = g.length === "long" ? 0.965 : g.length === "calf" ? 0.8 : g.length === "knee" ? 0.56 : 0.32;
   const top = a.hipY + 0.07;
   const f = (s: number) => {
     const r = a.region[s];
@@ -732,7 +803,7 @@ function pants(o: Outfit, g: Extract<Garment, { kind: "pants" }>, fabric: Fabric
     if (r === 0) return top - y;
     return -1;
   };
-  const cl: ClothLook = { color: g.color, fabric: g.cuffs ? "denim" : fabric };
+  const cl: ClothLook = { color: g.color, fabric: g.fabric ?? (g.cuffs ? "denim" : fabric) };
   const sh = cut(a, "tights", f);
   smooth(sh, 2, 0.5);
   inflate(sh, g.baggy ? TH.jacket + 0.01 : TH.shirt + 0.002);
@@ -972,3 +1043,161 @@ export function shade(hex: string, k: number): string {
 }
 
 export type { CV };
+
+// ——— building blocks for bespoke costumes ———————————————————————————————————————————————
+
+export interface TopOpts {
+  look: ClothLook;
+  /** Hem height of the torso part. */
+  bottom: number;
+  /** Neckline: V (crossed), open front, round, or a high funnel collar. */
+  neck: "v" | "open" | "crew" | "high";
+  /** For "v"/"open": where the opening ends (y) and its half-width at the neck. */
+  vBottom?: number;
+  vHalfTop?: number;
+  /** Half-width of an open front below the V (cardigans, open robes). */
+  openFront?: number;
+  /** Sleeve end (0 shoulder … 1 wrist); < 0 sleeveless; tights-fitted sleeves. */
+  sleeve: number;
+  thick?: number;
+  /** Hang loosely from the chest (0..1). */
+  drape?: number;
+  /** Wavy flounce at the hem: amplitude (m) and count round the body. */
+  flounce?: { amp: number; count: number; depth: number };
+  /** Continue below the waist as a coat skirt (from the skirt guide) down to this height. */
+  skirtTo?: number;
+  skirtFlare?: number;
+  hem?: number;
+  smooth?: number;
+}
+
+/** A general upper garment: shirts, jackets, cardigans, open robes, coats. */
+export function top(o: Outfit, t: TopOpts): Shell {
+  const a = o.a;
+  const nk = a.joint("neck");
+  let neck: (p: THREE.Vector3) => number;
+  if (t.neck === "crew") neck = crewNeck(a, 0.035);
+  else if (t.neck === "high") neck = (p) => nk.y + 0.075 - p.y;
+  else neck = vNeck(a, t.vBottom ?? a.chestY - 0.06, t.vHalfTop ?? 0.068, t.neck === "v" ? -0.014 : 0);
+  const open = t.openFront ?? 0;
+  const opening = (p: THREE.Vector3) => {
+    if (!open) return 1;
+    const fz = THREE.MathUtils.smoothstep(p.z - o.axisZ(p.y), -0.01, 0.06);
+    return THREE.MathUtils.lerp(1, Math.abs(p.x) - open, fz);
+  };
+  const base = topField(a, t.bottom, t.sleeve, neck);
+  const p = new THREE.Vector3();
+  const f = (s: number) => Math.min(base(s), a.region[s] === 0 ? opening(a.pos(s, p)) : 1);
+  const sh = cut(a, "tights", f);
+  smooth(sh, t.smooth ?? 3, 0.5);
+  inflate(sh, t.thick ?? TH.shirt);
+  if (t.drape) drape(o, sh, a.chestY + 0.02, t.bottom, t.drape);
+  if (t.flounce) {
+    const fl = t.flounce;
+    for (const v of sh.verts) {
+      if (v.region !== 0 && v.region < 6) continue;
+      const k = THREE.MathUtils.smoothstep(t.bottom + fl.depth - v.p.y, 0, fl.depth);
+      if (k <= 0) continue;
+      const c = o.axisZ(v.p.y);
+      const ang = Math.atan2(v.p.x, v.p.z - c);
+      const r = Math.hypot(v.p.x, v.p.z - c);
+      const s2 = (r + k * (fl.amp * 0.6 + fl.amp * Math.sin(ang * fl.count))) / r;
+      v.p.x *= s2;
+      v.p.z = c + (v.p.z - c) * s2;
+      v.p.y += k * fl.amp * 0.5 * Math.cos(ang * fl.count);
+    }
+  }
+  renormal(sh);
+  wrinkle(sh, 0.0022, 16, 3);
+  layer(o, t.look, sh, { hem: t.hem ?? 0.006 });
+  o.cover((s) => (a.region[s] === 0 && open ? -1 : f(s)), 0.03);
+  if (t.skirtTo !== undefined) {
+    const lf = F.min(F.below(a, t.bottom + 0.06), F.above(a, t.skirtTo), (s: number) => (open ? opening(a.pos(s, p)) : 1));
+    const lower = cut(a, "skirt", lf);
+    inflate(lower, (t.thick ?? TH.shirt) + 0.01);
+    flare(o, lower, a.hipY, t.skirtTo, t.skirtFlare ?? 0.06);
+    renormal(lower);
+    wrinkle(lower, 0.0035, 9, 11);
+    layer(o, t.look, lower, { hem: (t.hem ?? 0.006) * 1.5 });
+  }
+  return sh;
+}
+
+/** A ruffled bell cuff at the end of a sleeve (Luffy's cardigan). */
+export function bellCuff(o: Outfit, side: Side, at: number, depth: number, flare: number, cl: ClothLook) {
+  const a = o.a;
+  const c = a.arm[side];
+  const along = (t: number) => {
+    const d = t * c.total;
+    let k = 0;
+    while (k < c.len.length - 2 && c.len[k + 1] < d) k++;
+    return c.pts[k].clone().lerp(c.pts[k + 1], (d - c.len[k]) / (c.len[k + 1] - c.len[k]));
+  };
+  const path: THREE.Vector3[] = [];
+  const N = 6;
+  const span = depth / c.total;
+  for (let i = 0; i <= N; i++) path.push(along(at - span * 0.25 + (i / N) * span));
+  const dir = path[N].clone().sub(path[0]).normalize();
+  const fwd = new THREE.Vector3(0, 0, 1).addScaledVector(dir, -dir.z).normalize();
+  const out = new THREE.Vector3().crossVectors(dir, fwd);
+  const armR = 0.046 * (a.H / 1.75);
+  const w = wOne(o.bone(`foreArm${side}`));
+  tube(
+    o.acc(cl),
+    path,
+    () => ({ x: out, y: fwd }),
+    (t, ang) => armR + 0.012 + flare * Math.pow(t, 1.4) * (1 + 0.28 * Math.sin(ang * 9)),
+    () => w,
+    { segments: 36, tile: fabricTile(cl.fabric) },
+  );
+}
+
+/** Emit a shell split into colour zones by a test on each triangle's centre. */
+export function zoned(o: Outfit, sh: Shell, zones: { look: ClothLook; test: (p: THREE.Vector3, region: number) => boolean }[], fallback: ClothLook, hemDepth = 0.006) {
+  o.clear(sh);
+  renormal(sh);
+  const buckets = new Map<ClothLook, number[]>();
+  for (let t = 0; t < sh.tris.length; t += 3) {
+    const vs = [sh.verts[sh.tris[t]], sh.verts[sh.tris[t + 1]], sh.verts[sh.tris[t + 2]]];
+    const c = vs[0].p.clone().add(vs[1].p).add(vs[2].p).divideScalar(3);
+    const z = zones.find((zz) => zz.test(c, vs[0].region))?.look ?? fallback;
+    let b = buckets.get(z);
+    if (!b) buckets.set(z, (b = []));
+    b.push(sh.tris[t], sh.tris[t + 1], sh.tris[t + 2]);
+  }
+  for (const [look, tris] of buckets) {
+    const part: Shell = { verts: sh.verts, tris };
+    emit(o.acc(look), o.a, part, { tile: fabricTile(look.fabric) });
+  }
+  hem(o.acc(fallback), o.a, sh, hemDepth, { tile: fabricTile(fallback.fabric) });
+  o.record(sh);
+}
+
+/** Small rigid parts placed on the body (buttons, toggles, studs). */
+export function studs(o: Outfit, look: ClothLook, geo: THREE.BufferGeometry, at: { p: THREE.Vector3; n: THREE.Vector3; bone: string; scale?: number; spin?: number }[]) {
+  const acc = o.acc(look);
+  for (const s of at) {
+    const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), s.n.clone().normalize());
+    if (s.spin) q.multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), s.spin));
+    const m = new THREE.Matrix4().compose(s.p, q, new THREE.Vector3().setScalar(s.scale ?? 1));
+    appendGeometry(acc, geo, m, wOne(o.bone(s.bone)));
+  }
+}
+
+/** A cloth tail hanging from a point (sash ends, knot tails): a strip with soft folds. */
+export function tail(o: Outfit, look: ClothLook, from: THREE.Vector3, len: number, width: number, out: THREE.Vector3, sideDir: THREE.Vector3, bones: [string, string], twist = 0.25) {
+  const path: THREE.Vector3[] = [];
+  const side: THREE.Vector3[] = [];
+  const nrm: THREE.Vector3[] = [];
+  for (let i = 0; i <= 12; i++) {
+    const t = i / 12;
+    path.push(from.clone().add(new THREE.Vector3(0, -len * t, 0)).addScaledVector(out, 0.012 * Math.sin(t * Math.PI) + 0.004 * t).addScaledVector(sideDir, 0.01 * Math.sin(t * 5)));
+    const s = sideDir.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), Math.sin(t * 4) * twist);
+    side.push(s);
+    nrm.push(out.clone());
+  }
+  const w = (t: number) => wMix([[wOne(o.bone(bones[0])), 1 - t], [wOne(o.bone(bones[1])), t]]);
+  strip(o.acc(look), path, side, nrm, (t) => width * (1 - 0.1 * t), w, { tile: fabricTile(look.fabric) });
+}
+
+export { TH, drape, flare, pleat, wrinkle, layer, kimonoSleeve, collar, crewNeck, vNeck, topField };

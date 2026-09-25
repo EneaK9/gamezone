@@ -6,6 +6,7 @@ import * as THREE from "three";
 import type { Look } from "../../../shared/look";
 import { Anatomy, SIDES, sx } from "./anatomy";
 import { buildAccessories } from "./accessories";
+import { buildCostume, buildCostumeUnder } from "./costumes";
 import { eyeMaterials, type EyeStyle, type EyeUniforms } from "./eyes";
 import { buildFootwear } from "./footwear";
 import { buildGarments, decals, Outfit } from "./garments";
@@ -118,7 +119,9 @@ export function buildHuman(look: Look, opts: BuildOpts = {}): HumanBuilt {
 
   // Clothes first: they decide which skin is hidden.
   const outfit = new Outfit(a);
+  const costumeStrokes = buildCostumeUnder(outfit, look);
   buildGarments(outfit, look);
+  costumeStrokes.push(...buildCostume(outfit, look));
   buildAccessories(outfit, look);
   buildFootwear(outfit, look);
   const hair = buildHair(a, look);
@@ -129,9 +132,9 @@ export function buildHuman(look: Look, opts: BuildOpts = {}): HumanBuilt {
   const img = images.get(sid);
   const eyeR = eyeRadius(kit, body);
   const scalp = hair.scalp;
-  const strokes = img ? markStrokes(a, look, { scalp, hairColor: look.hair.color }) : [];
+  const strokes = img ? [...markStrokes(a, look, { scalp, hairColor: look.hair.color, hairline: hair.hairline }), ...costumeStrokes] : [];
   const size = opts.skinSize ?? 1024;
-  const key = `${sid}|${size}|${(look.marks ?? []).join(",")}|${look.facial ?? ""}|${look.facialColor ?? ""}|${scalp}|${look.hair.color}|${Math.round(look.height * 100)}`;
+  const key = `${sid}|${size}|${look.costume ?? ""}|${(look.marks ?? []).join(",")}|${look.facial ?? ""}|${look.facialColor ?? ""}|${scalp}|${look.hair.style}|${look.hair.color}|${Math.round(look.height * 100)}`;
   const skinTex = img ? composeSkin(img, key, size, eyeHoles(a, eyeR), strokes) : tex(kit, `skin-${sid}.jpg`);
   const tone = img ? toneFor(skinAverage(img, sid), new THREE.Color(look.skin)) : new THREE.Color(1, 1, 1);
   const skin = skinMaterial({ map: skinTex, tone, roughness: look.body?.oily ? 0.36 : 0.5 });

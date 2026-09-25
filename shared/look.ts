@@ -37,12 +37,17 @@ export type Headgear =
 
 export type Footwear = "waraji" | "zori" | "geta" | "boots" | "ninja_sandals" | "wrestling_boots" | "bare";
 
-export type Garment =
+/** Fabric names understood by the character builder (src/characters/human/fabric.ts). */
+export type FabricName = "cotton" | "linen" | "silk" | "denim" | "knit" | "wool" | "leather" | "fur" | "canvas" | "spandex" | "terry";
+
+export type Garment = GarmentKind & { fabric?: FabricName };
+
+type GarmentKind =
   | { kind: "kimono"; color: string; pattern?: Pattern; accent?: string; sleeves: "wide" | "narrow" | "short" | "none"; collar?: string; open?: boolean }
   | { kind: "long_kimono"; color: string; pattern?: Pattern; accent?: string; collar?: string }
   | { kind: "haori"; color: string; crest?: string; long?: boolean; sleeveless?: boolean }
   | { kind: "hakama"; color: string; stripes?: string }
-  | { kind: "pants"; color: string; length: "long" | "knee" | "shorts"; stripe?: string; cuffs?: string; baggy?: boolean }
+  | { kind: "pants"; color: string; length: "long" | "calf" | "knee" | "shorts"; stripe?: string; cuffs?: string; baggy?: boolean }
   | { kind: "shirt"; color: string; sleeves: "long" | "short" | "rolled" | "none"; open?: boolean; collar?: boolean }
   | { kind: "vest"; color: string; buttons?: string }
   | { kind: "track_jacket"; color: string; shoulders: string; collar?: string; zip?: string }

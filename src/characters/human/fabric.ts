@@ -21,21 +21,21 @@ interface FabricDef {
 }
 
 export const FABRICS: Record<Fabric, FabricDef> = {
-  cotton: { tex: "cotton_jersey", tile: 0.1, roughness: 0.92, normal: 0.7, detail: 0.35, sheen: 0.35 },
-  linen: { tex: "rough_linen", tile: 0.16, roughness: 0.95, normal: 1.0, detail: 0.45, sheen: 0.3 },
-  silk: { tex: "crepe_satin", tile: 0.14, roughness: 0.38, normal: 0.45, detail: 0.2, sheen: 0.7 },
+  cotton: { tex: "cotton_jersey", tile: 0.1, roughness: 0.95, normal: 0.7, detail: 0.35, sheen: 0.18 },
+  linen: { tex: "rough_linen", tile: 0.16, roughness: 0.97, normal: 1.0, detail: 0.45, sheen: 0.15 },
+  silk: { tex: "crepe_satin", tile: 0.14, roughness: 0.55, normal: 0.45, detail: 0.2, sheen: 0.45 },
   denim: { tex: "denim_fabric", tile: 0.14, roughness: 0.88, normal: 1.0, detail: 0.6, sheen: 0.25 },
-  knit: { tex: "knitted_fleece", tile: 0.09, roughness: 0.96, normal: 1.3, detail: 0.5, sheen: 0.45 },
-  wool: { tex: "poly_wool_herringbone", tile: 0.16, roughness: 0.92, normal: 0.9, detail: 0.45, sheen: 0.4 },
-  leather: { tex: "brown_leather", tile: 0.22, roughness: 0.52, normal: 0.8, detail: 0.35, sheen: 0 },
+  knit: { tex: "knitted_fleece", tile: 0.09, roughness: 0.98, normal: 1.3, detail: 0.5, sheen: 0.25 },
+  wool: { tex: "poly_wool_herringbone", tile: 0.16, roughness: 0.97, normal: 0.9, detail: 0.45, sheen: 0.18 },
+  leather: { tex: "brown_leather", tile: 0.22, roughness: 0.62, normal: 0.8, detail: 0.35, sheen: 0 },
   fur: { tex: "curly_teddy_natural", tile: 0.08, roughness: 1, normal: 1.6, detail: 0.55, sheen: 0.6 },
   canvas: { tex: "hessian_230", tile: 0.14, roughness: 0.97, normal: 1.0, detail: 0.5, sheen: 0.2 },
-  spandex: { tex: "scuba_suede", tile: 0.1, roughness: 0.48, normal: 0.35, detail: 0.15, sheen: 0.35 },
+  spandex: { tex: "scuba_suede", tile: 0.1, roughness: 0.5, normal: 0.35, detail: 0.15, sheen: 0.3 },
   terry: { tex: "terry_cloth", tile: 0.1, roughness: 0.97, normal: 1.1, detail: 0.4, sheen: 0.4 },
   lacquer: { tile: 1, roughness: 0.22, normal: 0, detail: 0, sheen: 0, clearcoat: 0.8 },
   metal: { tile: 1, roughness: 0.32, normal: 0, detail: 0, sheen: 0, metalness: 1 },
   straw: { tex: "hessian_230", tile: 0.06, roughness: 0.9, normal: 1.2, detail: 0.5, sheen: 0.15 },
-  rope: { tex: "hessian_230", tile: 0.05, roughness: 0.95, normal: 1.4, detail: 0.5, sheen: 0.2 },
+  rope: { tex: "hessian_230", tile: 0.04, roughness: 0.98, normal: 1.6, detail: 0.6, sheen: 0.1 },
   wood: { tile: 1, roughness: 0.6, normal: 0, detail: 0, sheen: 0 },
   bone: { tile: 1, roughness: 0.45, normal: 0, detail: 0, sheen: 0.1, clearcoat: 0.3 },
 };
@@ -184,8 +184,9 @@ export function clothMaterial(l: ClothLook): THREE.MeshPhysicalMaterial {
     metalness: def.metalness ?? 0,
     side: THREE.DoubleSide,
     sheen: def.sheen,
-    sheenRoughness: 0.75,
-    sheenColor: new THREE.Color(l.color).lerp(new THREE.Color("#ffffff"), 0.35),
+    sheenRoughness: 0.9,
+    sheenColor: new THREE.Color(l.color).lerp(new THREE.Color("#ffffff"), 0.2).multiplyScalar(0.6),
+    specularIntensity: def.metalness ? 1 : def.clearcoat ? 0.8 : 0.45,
     clearcoat: def.clearcoat ?? 0,
     clearcoatRoughness: 0.25,
     transparent: (l.opacity ?? 1) < 1,
@@ -205,9 +206,9 @@ export function clothMaterial(l: ClothLook): THREE.MeshPhysicalMaterial {
     accent: { value: new THREE.Color(l.accent ?? "#ffffff") },
   };
   if (set) {
+    // Weave relief only; the maps' roughness channel makes cloth read as plastic.
     m.normalMap = set.normalMap;
     m.normalScale = new THREE.Vector2(def.normal, def.normal);
-    m.roughnessMap = set.arm;
   }
   m.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms);
@@ -225,7 +226,7 @@ export function clothMaterial(l: ClothLook): THREE.MeshPhysicalMaterial {
       .replace(
         "#include <map_fragment>",
         `#include <map_fragment>
-        #if defined( USE_NORMALMAP ) || defined( USE_ROUGHNESSMAP )
+        #if defined( USE_NORMALMAP )
         {
           vec2 fuv = vNormalMapUv;
           vec3 dt = texture2D( detailMap, fuv ).rgb;

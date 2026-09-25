@@ -6,7 +6,7 @@
 import * as THREE from "three";
 import type { HairStyle, Look } from "../../../shared/look";
 import type { Anatomy } from "./anatomy";
-import type { W } from "./cloth";
+import { cut, renormal, type W } from "./cloth";
 
 // ——— geometry ——————————————————————————————————————————————————————————————————————————
 
@@ -78,7 +78,7 @@ function writeClump(acc: HairAcc, c: Clump, pal: Palette, rnd: () => number) {
   const n = c.pts.length;
   const seg = c.card ? 1 : 7;
   const shade = 0.88 + rnd() * 0.24;
-  const taper = c.taper ?? ((t: number) => Math.pow(1 - t, 0.8) * (1 - 0.15 * t) + 0.02);
+  const taper = c.taper ?? ((t: number) => (1 - Math.pow(t, 1.8)) * (1 - 0.2 * t) + 0.06);
   const rings: number[][] = [];
   for (let i = 0; i < n; i++) {
     const t = i / (n - 1);
@@ -163,19 +163,47 @@ export function hairMaterial(opts: { rough?: number; sheen?: string } = {}) {
   m = new THREE.MeshPhysicalMaterial({
     map: strands(),
     vertexColors: true,
-    roughness: opts.rough ?? 0.42,
+    roughness: opts.rough ?? 0.5,
     metalness: 0,
-    alphaTest: 0.42,
+    alphaTest: 0.5,
     alphaToCoverage: true,
     side: THREE.DoubleSide,
-    anisotropy: 0.75,
+    anisotropy: 0.5,
     anisotropyRotation: Math.PI / 2,
-    sheen: 0.35,
-    sheenRoughness: 0.45,
-    sheenColor: new THREE.Color(opts.sheen ?? "#6a5a50"),
-    specularIntensity: 0.7,
+    sheen: 0.2,
+    sheenRoughness: 0.6,
+    sheenColor: new THREE.Color(opts.sheen ?? "#6a5a50").multiplyScalar(0.5),
+    specularIntensity: 0.45,
   });
   hairMats.set(key, m);
+  return m;
+}
+
+const capMats = new Map<string, THREE.MeshPhysicalMaterial>();
+/** Opaque base layer of hair (the strand texture as colour detail, no cut-out). */
+export function hairCapMaterial(rough = 0.55) {
+  let m = capMats.get(String(rough));
+  if (m) return m;
+  m = new THREE.MeshPhysicalMaterial({
+    map: strands(),
+    vertexColors: true,
+    roughness: rough,
+    anisotropy: 0.45,
+    anisotropyRotation: Math.PI / 2,
+    specularIntensity: 0.4,
+    sheen: 0.15,
+    sheenRoughness: 0.7,
+  });
+  // Strand gaps are transparent in the texture: read them as darker hair, not black.
+  m.onBeforeCompile = (shader) => {
+    shader.fragmentShader = shader.fragmentShader.replace(
+      "#include <map_fragment>",
+      `vec4 capTexel = texture2D( map, vMapUv );
+      diffuseColor.rgb *= mix( 0.78, 1.0, capTexel.a ) * mix( 0.88, 1.1, capTexel.r );`,
+    );
+  };
+  m.customProgramCacheKey = () => "hair-cap";
+  capMats.set(String(rough), m);
   return m;
 }
 
@@ -254,9 +282,18 @@ function grow(h: Head, root: THREE.Vector3, dir0: THREE.Vector3, o: GrowOpts, rn
 
 // ——— styles ——————————————————————————————————————————————————————————————————————————————————
 
+export interface Hairline {
+  front: number;
+  side: number;
+  back: number;
+  /** Directions inside the hairline that are shaved (the samurai's pate). */
+  exclude?: (d: THREE.Vector3) => boolean;
+}
+
 export interface HairResult {
   meshes: { geometry: THREE.BufferGeometry; material: THREE.Material }[];
   scalp: "hair" | "shaved" | "none";
+  hairline?: Hairline;
 }
 
 export function buildHair(a: Anatomy, look: Look): HairResult {
@@ -284,21 +321,64 @@ export function buildHair(a: Anatomy, look: Look): HairResult {
   const S = h.s;
   const hatted = look.headgear === "straw_hat" || look.headgear === "kasa" || look.headgear === "jingasa";
 
-  /** A cap of short hair over the scalp: many small flat clumps lying along a flow field. */
-  const cap = (opts: { front: number; back: number; side: number; flow: (d: THREE.Vector3) => THREE.Vector3; len: number; width: number; count: number; lift?: number; exclude?: (d: THREE.Vector3) => boolean }) => {
-    for (let k = 0; k < opts.count; k++) {
-      // Fibonacci sphere directions, filtered by the hairline.
-      const y = 1 - ((k + 0.5) / opts.count) * 2;
-      const r = Math.sqrt(1 - y * y);
-      const th = k * 2.39996;
-      const d = new THREE.Vector3(Math.cos(th) * r, y, Math.sin(th) * r);
-      if (!inHair(d, opts.front, opts.side, opts.back)) continue;
-      if (opts.exclude?.(d)) continue;
-      const root = h.at(d.x, d.y, d.z, 0.002 * S);
-      const f = opts.flow(d);
-      const pts = grow(h, root, f, { len: opts.len * S * (0.8 + rnd() * 0.4), steps: 5, collide: (opts.lift ?? 0.004) * S, gravity: 0.1 }, rnd);
-      clump({ pts, side: sideOf(pts), width: opts.width * S * (0.8 + rnd() * 0.4), flat: 0.35, w: hw });
+  /**
+   * The base layer: the scalp itself cut at the hairline, smoothed, and thickened toward
+   * the crown (tapering to nothing at the hairline so there's no helmet edge). Strands
+   * run along the meridians. `len` sets the thickness; flow/width/count are unused.
+   */
+  const capAcc = new HairAcc();
+  let hairline: Hairline | undefined;
+  const cap = (opts: { front: number; back: number; side: number; flow?: (d: THREE.Vector3) => THREE.Vector3; len: number; width?: number; count?: number; lift?: number; exclude?: (d: THREE.Vector3) => boolean }) => {
+    hairline = { front: opts.front, side: opts.side, back: opts.back, exclude: opts.exclude };
+    const thick = (opts.lift ?? 0.003) + opts.len * 0.13;
+    const p = new THREE.Vector3();
+    const d = new THREE.Vector3();
+    const dir = (q: THREE.Vector3) => a.headDir(q, d).normalize();
+    const field = (s: number) => {
+      if (a.region[s] !== 1) return -1;
+      const dn = dir(a.pos(s, p));
+      if (opts.exclude?.(dn)) return -1;
+      return hairF(dn, opts.front, opts.side, opts.back);
+    };
+    const sh = cut(a, "body", field);
+    for (const v of sh.verts) {
+      const f = hairF(dir(v.p), opts.front, opts.side, opts.back);
+      v.p.addScaledVector(v.n, 0.0025 + thick * S * THREE.MathUtils.smoothstep(f, 0, 0.28));
     }
+    renormal(sh);
+    const base = pal.root.clone().lerp(pal.mid, 0.55);
+    const uvOf = (q: THREE.Vector3): [number, number] => {
+      const n = dir(q);
+      return [(Math.atan2(n.x, n.z) / (Math.PI * 2)) * 7, (Math.acos(THREE.MathUtils.clamp(n.y, -1, 1)) / Math.PI) * 5];
+    };
+    const cache = new Map<string, number>();
+    for (let t = 0; t < sh.tris.length; t += 3) {
+      const ids = [sh.tris[t], sh.tris[t + 1], sh.tris[t + 2]];
+      const uvs = ids.map((i) => uvOf(sh.verts[i].p));
+      const shift = uvs.map((u) => (u[0] - uvs[0][0] > 3.5 ? -7 : u[0] - uvs[0][0] < -3.5 ? 7 : 0));
+      const out = ids.map((vi, k) => {
+        const key = `${vi}:${shift[k]}`;
+        let o = cache.get(key);
+        if (o === undefined) {
+          const v = sh.verts[vi];
+          const c = base.clone().multiplyScalar(0.92 + 0.16 * Math.sin(vi * 12.9898));
+          o = capAcc.vertex(v.p, v.n, uvs[k][0] + shift[k], uvs[k][1], c, v.w);
+          cache.set(key, o);
+        }
+        return o;
+      });
+      capAcc.idx.push(out[0], out[1], out[2]);
+    }
+  };
+  const result = (acc: HairAcc, scalp: HairResult["scalp"], look: Look): HairResult => {
+    const out = resultOf(acc, scalp, look);
+    if (capAcc.idx.length) {
+      const g = capAcc.geometry();
+      g.computeTangents();
+      out.meshes.unshift({ geometry: g, material: hairCapMaterial(look.hair.style === "topknot" || look.hair.style === "long_straight" ? 0.42 : 0.55) });
+    }
+    out.hairline = hairline;
+    return out;
   };
 
   switch (style as HairStyle) {
@@ -419,10 +499,23 @@ export function buildHair(a: Anatomy, look: Look): HairResult {
   }
 }
 
-function result(acc: HairAcc, scalp: HairResult["scalp"], look: Look): HairResult {
+function resultOf(acc: HairAcc, scalp: HairResult["scalp"], look: Look): HairResult {
   if (!acc.idx.length) return { meshes: [], scalp };
   const glossy = look.hair.style === "topknot" || look.hair.style === "long_straight" || look.hair.style === "swept";
-  return { meshes: [{ geometry: acc.geometry(), material: hairMaterial({ rough: glossy ? 0.34 : 0.45, sheen: look.hair.color }) }], scalp };
+  const g = acc.geometry();
+  g.computeTangents();
+  return { meshes: [{ geometry: g, material: hairMaterial({ rough: glossy ? 0.4 : 0.5, sheen: look.hair.color }) }], scalp };
+}
+
+/** Signed hairline field (≥ 0 inside) for a unit head-local direction. */
+export function hairF(d: THREE.Vector3, front: number, side: number, back: number) {
+  const fz = THREE.MathUtils.smoothstep(d.z, 0.2, 0.75);
+  const bz = THREE.MathUtils.smoothstep(-d.z, 0.2, 0.8);
+  const limit = side * (1 - fz) * (1 - bz) + front * fz + back * bz;
+  let f = d.y - limit;
+  const ear = Math.min(0.25 - d.y, Math.abs(d.x) - 0.75, d.z + 0.35);
+  if (ear > 0) f = Math.min(f, -ear);
+  return f;
 }
 
 /** Is a head-local direction inside the hairline? front/side/back are min d.y there. */
